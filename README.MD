@@ -3,7 +3,7 @@
 
   
 
-This repository contains the full training, alignment, and evaluation pipeline for **ConvRec-R1**, including both **Supervised Fine-Tuning (SFT)** and **Rank-GRPOt** stages.  
+This repository contains the full training, alignment, and evaluation pipeline for **ConvRec-R1**, including both **Supervised Fine-Tuning (SFT)** and **Rank-GRPO** stages.  
 
 ## ⚙️ Environment Setup
 
