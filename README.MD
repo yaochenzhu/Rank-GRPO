@@ -5,6 +5,9 @@
 
 This repository contains the full training, alignment, and evaluation pipeline for **ConvRec-R1**, including both **Supervised Fine-Tuning (SFT)** and **Rank-GRPO** stages.  
 
+> Rank-GRPO: Training LLM-based Conversational Recommender Systems with Reinforcement Learning       
+>**Yaochen Zhu**, Harald Steck, Dawen Liang, Yinhan He, Vito Ostuni, Jundong Li, Nathan Kallus     
+
 ## ⚙️ Environment Setup
 
 
@@ -141,3 +144,16 @@ python grpo_test.py \
 --checkpoint 15800 \
 2>&1 | tee logs/eval_grpo_test_qwen25_0.5b.txt
 ```
+
+
+## 🌟 Citation
+If you find this work is helpful to your research, please consider citing our paper:
+```
+@inproceedings{zhu2025rankgrpo,
+  title={Rank-GRPO: Training LLM-based Conversational Recommender Systems with Reinforcement Learning},
+  author={Zhu, Yaochen and Steck, Harald and Liang, Dawen and He, Yinhan, Ostuni, Vito and Li, Jundong and Kallus, Nathan},
+  booktitle={ArXiv},
+  year={2025}
+}
+```
+**Thanks for your interest in our work!**
