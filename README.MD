@@ -10,7 +10,7 @@ This repository contains the full training, alignment, and evaluation pipeline f
 
 ### **Update!** ###
 
-We have released the SFT checkpoint and on-policy Rank-GRPO (exp_inf) checkpoints for Qwen2.5-0.5B-Instruct and Llama3.1-3B-Instruct as well as the full trainer state!
+We have released the SFT checkpoint and on-policy Rank-GRPO (exp_inf) checkpoints for Qwen2.5-0.5B-Instruct and Llama3.2-3B-Instruct as well as the full trainer state!
 
 ## ⚙️ Environment Setup
 
@@ -98,7 +98,24 @@ grpo_test_qwen25_0.5b_with_kl.py \
 --catalog_path gt_catalog.pkl \
 2>&1 | tee logs/outputs_qwen25_0.5b_zero.txt
 ```
-  
+
+## 📦 Checkpoints & Trainer State
+
+We provide **SFT model weights**, **Rank-GRPO (exp_inf) policy weights**, and the **full trainer state** to reproduce or continue experiments.
+
+> **Versions tested with:** `trl[vllm]==0.21.0`, `torch==2.7.1` (CUDA 12.6), `vllm==0.10.0`, `accelerate` with the configs in this repo.  
+> For exact reproducibility, keep world size, tensor parallel size, and KL/reward settings the same as in your original run.
+
+### Downloads
+
+**Supervised Fine-Tuning (SFT)**
+- Qwen2.5-0.5B-Instruct — [checkpoint](https://drive.google.com/file/d/1Br-CMrzgUzJ7_fwFVahCqzJ8TyGZ5Zfz/view?usp=drive_link)
+- Llama3.2-3B-Instruct — [checkpoint](https://drive.google.com/file/d/1GxVs51Ry78cQGGVrxwTWUinzQUrH7xuK/view?usp=sharing)
+
+**Rank-GRPO (exp_inf)**
+- Qwen2.5-0.5B-Instruct — [policy checkpoint](https://drive.google.com/file/d/1VNSkbXGpawfj1amRMhfoiPQHsOKcYJzA/view?usp=sharing)
+- Llama3.2-3B-Instruct — [policy checkpoint](https://drive.google.com/file/d/1y2yqcsru-_jxbfWEyRBbkcrt5wZ8RFsD/view?usp=sharing)
+
 
 ## 📊 Evaluation
 
