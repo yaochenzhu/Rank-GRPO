@@ -8,8 +8,11 @@ This repository contains the full training, alignment, and evaluation pipeline f
 > Rank-GRPO: Training LLM-based Conversational Recommender Systems with Reinforcement Learning       
 >**Yaochen Zhu**, Harald Steck, Dawen Liang, Yinhan He, Vito Ostuni, Jundong Li, Nathan Kallus     
 
-## ⚙️ Environment Setup
+### Update ###
 
+We have released the SFT checkpoint and on-policy Rank-GRPO (exp_inf) checkpoints for Qwen2.5-0.5B-Instruct and Llama3.1-3B-Instruct as well as the full trainer state.
+
+## ⚙️ Environment Setup
 
 ```bash
 
