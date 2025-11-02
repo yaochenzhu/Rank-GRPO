@@ -99,6 +99,21 @@ grpo_test_qwen25_0.5b_with_kl.py \
 2>&1 | tee logs/outputs_qwen25_0.5b_zero.txt
 ```
 
+## 📚 Datasets
+
+We release a **processed Reddit-v2** dataset prepared for both **SFT** and **Rank-GRPO**:
+
+- **Download:** [Reddit-v2 (processed)](https://drive.google.com/file/d/11tOfUMlVOylkkcnwPqGM_0IuiIeHjLle/view?usp=sharing)
+
+### Time-based splits (following the original paper)
+| Split       | Time window    |
+|-------------|-----------------|
+| **Train**   | ≤ **2022-10**   |
+| **Val**     | **2022-11**     |
+| **Test**    | **2022-12**     |
+
+As in prior work, **recommendations from different Reddit users for the same query (which are used as groundtruths) are treated as different samples**, rather than aggregating them into a single sample.
+
 ## 📦 Checkpoints & Trainer State
 
 We provide **SFT model weights**, **Rank-GRPO (exp_inf) policy weights**, and the **full trainer state** to reproduce or continue experiments.
