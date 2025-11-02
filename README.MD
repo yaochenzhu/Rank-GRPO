@@ -103,9 +103,6 @@ grpo_test_qwen25_0.5b_with_kl.py \
 
 We provide **SFT model weights**, **Rank-GRPO (exp_inf) policy weights**, and the **full trainer state** to reproduce or continue experiments.
 
-> **Versions tested with:** `trl[vllm]==0.21.0`, `torch==2.7.1` (CUDA 12.6), `vllm==0.10.0`, `accelerate` with the configs in this repo.  
-> For exact reproducibility, keep world size, tensor parallel size, and KL/reward settings the same as in your original run.
-
 ### Downloads
 
 **Supervised Fine-Tuning (SFT)**
