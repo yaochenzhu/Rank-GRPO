@@ -7,6 +7,7 @@ This repository contains the full training, alignment, and evaluation pipeline f
 
 > Rank-GRPO: Training LLM-based Conversational Recommender Systems with Reinforcement Learning       
 >**Yaochen Zhu**, Harald Steck, Dawen Liang, Yinhan He, Vito Ostuni, Jundong Li, Nathan Kallus     
+> Work done in Netflix Research 2025.   
 
 ### **Update!** ###
 
