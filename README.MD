@@ -21,7 +21,7 @@ We have released the SFT checkpoint and on-policy Rank-GRPO (exp_inf) checkpoint
 conda create -n rank-grpo python==3.10.0
 
 # Activate the environment
-conda  activate  rank-grpo
+conda activate rank-grpo
 
 # Install core dependencies
 uv pip install trl[vllm]==0.21.0
