@@ -1,13 +1,128 @@
 import os
-import wandb
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "libs", "trl"))
+
+import json
+import math
+import shutil
+
 from datasets import load_from_disk
-from trl import GRPOConfig, RankGRPOTrainer
+from rank_grpo_trainer import GRPOConfig, RankGRPOTrainer
 import argparse
+from transformers import TrainerCallback
 
 from libs.data import load_catalog
 from libs.utils import StepLRSchedulerCallback
 from libs.reward_funcs import make_reward_func, make_reward_func_individual
-from libs.logs import setup_environment, setup_wandb
+from libs.logs import normalize_report_to, setup_environment, setup_run
+
+
+def _safe_name(value):
+    return str(value).rstrip("/").replace(os.sep, "_").replace("/", "_")
+
+
+def resolve_sft_model_path(model_name, sft_checkpoint):
+    if os.path.isdir(model_name):
+        checkpoint_path = os.path.join(model_name, f"checkpoint-{sft_checkpoint}")
+        return checkpoint_path if os.path.isdir(checkpoint_path) else model_name
+    return os.path.join("./results", model_name, f"checkpoint-{sft_checkpoint}")
+
+
+def load_dataset_path(path, split=None):
+    if split and os.path.isdir(os.path.join(path, split)):
+        return load_from_disk(os.path.join(path, split))
+    return load_from_disk(path)
+
+
+class SaveTimeValidationTopKCallback(TrainerCallback):
+    def __init__(self, top_k, metric_name, greater_is_better=True):
+        self.trainer = None
+        self.top_k = int(top_k)
+        self.metric_name = metric_name
+        self.greater_is_better = bool(greater_is_better)
+        self._is_evaluating = False
+
+    def set_trainer(self, trainer):
+        self.trainer = trainer
+        return self
+
+    def _state_path(self, output_dir):
+        return os.path.join(output_dir, "topk_checkpoints.json")
+
+    def _load_state(self, output_dir):
+        try:
+            with open(self._state_path(output_dir)) as f:
+                state = json.load(f)
+        except FileNotFoundError:
+            return []
+        return state if isinstance(state, list) else []
+
+    def _save_state(self, output_dir, state):
+        with open(self._state_path(output_dir), "w") as f:
+            json.dump(state, f, indent=2, sort_keys=True)
+
+    def _metric_value(self, metrics):
+        metric_name = self.metric_name
+        if metric_name not in metrics and not metric_name.startswith("eval_"):
+            metric_name = f"eval_{metric_name}"
+        value = metrics.get(metric_name)
+        if value is None:
+            return metric_name, None
+        try:
+            return metric_name, float(value)
+        except (TypeError, ValueError):
+            return metric_name, None
+
+    def on_save(self, args, state, control, **kwargs):
+        if self.trainer is None or self._is_evaluating or state.global_step <= 0:
+            return control
+
+        self._is_evaluating = True
+        try:
+            metrics = self.trainer.evaluate(metric_key_prefix="eval")
+        finally:
+            self._is_evaluating = False
+
+        if self.top_k <= 0:
+            return control
+
+        metric_name, metric_value = self._metric_value(metrics)
+        if metric_value is None or not math.isfinite(metric_value):
+            if self.trainer.is_world_process_zero():
+                print(f"[topk] Metric {metric_name} missing or non-finite; keeping checkpoint unranked.")
+            return control
+
+        checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+        self.trainer.accelerator.wait_for_everyone()
+        if not self.trainer.is_world_process_zero() or not os.path.isdir(checkpoint_dir):
+            return control
+
+        topk_state = [
+            entry for entry in self._load_state(args.output_dir)
+            if int(entry.get("step", -1)) != int(state.global_step)
+        ]
+        topk_state.append(
+            {
+                "step": int(state.global_step),
+                "metric": metric_name,
+                "value": metric_value,
+                "path": checkpoint_dir,
+            }
+        )
+        topk_state.sort(key=lambda entry: float(entry["value"]), reverse=self.greater_is_better)
+        keep = topk_state[: self.top_k]
+        drop = topk_state[self.top_k :]
+        keep_paths = {entry["path"] for entry in keep}
+
+        for entry in drop:
+            path = entry.get("path")
+            if path and path not in keep_paths and os.path.isdir(path):
+                shutil.rmtree(path)
+                print(f"[topk] Removed checkpoint outside top-{self.top_k}: {path}")
+
+        self._save_state(args.output_dir, keep)
+        print(f"[topk] Kept top-{self.top_k} checkpoints by {metric_name}: {keep}")
+        return control
 
 
 def parse_args():
@@ -28,6 +143,26 @@ def parse_args():
             "Path to the training dataset directory (load_from_disk). "
             "Only the training split is loaded — validation is performed via saved checkpoints."
         ),
+    )
+    core.add_argument(
+        "--val_path",
+        default=None,
+        help=(
+            "Path to the validation dataset directory. Accepts either a split directory or a "
+            "dataset directory containing a validation split."
+        ),
+    )
+    core.add_argument(
+        "--val_max_samples",
+        type=int,
+        default=None,
+        help="Maximum number of validation examples to evaluate on each checkpoint save.",
+    )
+    core.add_argument(
+        "--val_shuffle",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether to shuffle validation examples in the eval sampler.",
     )
     core.add_argument(
         "--model_name",
@@ -90,10 +225,19 @@ def parse_args():
     vllm.add_argument("--vllm_tensor_parallel_size", type=int, default=4, help="vLLM tensor parallel size.")
 
     log = parser.add_argument_group("Logging / checkpointing")
+    log.add_argument(
+        "--report_to",
+        default="tensorboard",
+        choices=["tensorboard", "wandb", "both", "none"],
+        help="Logging backend. Use 'both' to log to TensorBoard and W&B.",
+    )
     log.add_argument("--wandb_project", default="rank_grpo", help="Weights & Biases project name.")
     log.add_argument("--logging_steps", type=int, default=10, help="Logging frequency in steps.")
     log.add_argument("--save_strategy", default="steps", help="Checkpoint save strategy: steps or epoch.")
     log.add_argument("--save_steps", type=int, default=200, help="Save model every N steps.")
+    log.add_argument("--topk_checkpoints", type=int, default=3, help="Keep top-K checkpoints by validation metric.")
+    log.add_argument("--topk_metric", default="eval_reward_total", help="Validation metric used for top-K checkpointing.")
+    log.add_argument("--topk_greater_is_better", action=argparse.BooleanOptionalAction, default=True)
     log.add_argument("--resume", action="store_true", help="Resume training from the latest checkpoint.")
 
     misc = parser.add_argument_group("Miscellaneous")
@@ -106,11 +250,19 @@ def parse_args():
 
 def main():
     args = parse_args()
-    accelerator = setup_environment(args.wandb_project)
+    report_to = normalize_report_to(args.report_to)
+    accelerator = setup_environment(args.wandb_project, report_to)
 
     # Load datasets and catalog
     gt_catalog = load_catalog(args.catalog_path)
-    train_dataset = load_from_disk(os.path.join(args.train_path, "train"))
+    train_dataset = load_dataset_path(args.train_path, split="train")
+    val_dataset = load_dataset_path(args.val_path, split="validation") if args.val_path else None
+    if val_dataset is not None and args.val_max_samples is not None:
+        if args.val_max_samples <= 0:
+            raise ValueError("--val_max_samples must be a positive integer.")
+        val_max_samples = min(args.val_max_samples, len(val_dataset))
+        val_dataset = val_dataset.select(range(val_max_samples))
+        accelerator.print(f"Using {val_max_samples} validation samples.")
 
     # Reward function selection
     if args.reward_func == "exp_inf":
@@ -121,9 +273,17 @@ def main():
         raise ValueError(f"{args.reward_func} not implemented!")
 
     # Define model paths and W&B run
-    sft_model_path = f"./results/{args.model_name}/checkpoint-{args.sft_checkpoint}"
-    output_dir = f"./results/grpo/{args.model_name}_lr{args.lr}_kl{args.kl_beta}_mu{args.mu}"
-    run_name = setup_wandb(accelerator, output_dir, args.model_name, args.sft_checkpoint, args.seed, args.wandb_project)
+    sft_model_path = resolve_sft_model_path(args.model_name, args.sft_checkpoint)
+    output_dir = os.path.join("./results/grpo", f"{_safe_name(args.model_name)}_lr{args.lr}_kl{args.kl_beta}_mu{args.mu}")
+    run_name = setup_run(
+        accelerator,
+        output_dir,
+        args.model_name,
+        args.sft_checkpoint,
+        args.seed,
+        args.wandb_project,
+        report_to,
+    )
 
     # ---------------- Learning rate scheduler ----------------
     # According to the paper setup: constant LR for small model, decay for larger models.
@@ -149,6 +309,8 @@ def main():
         save_strategy=args.save_strategy,
         save_steps=args.save_steps,
         logging_steps=args.logging_steps,
+        logging_dir=os.path.join(output_dir, "tensorboard"),
+        report_to=report_to,
         bf16=args.bf16,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         learning_rate=args.lr,
@@ -165,6 +327,7 @@ def main():
         gradient_checkpointing=args.gradient_checkpointing,
         run_name=run_name,
     )
+    config.val_shuffle = args.val_shuffle
 
     # ---------------- Trainer ----------------
     trainer = RankGRPOTrainer(
@@ -172,8 +335,17 @@ def main():
         reward_funcs=reward_func,
         args=config,
         train_dataset=train_dataset,
-        callbacks=[callback], 
+        eval_dataset=val_dataset,
+        callbacks=[callback],
     )
+    if val_dataset is not None:
+        trainer.add_callback(
+            SaveTimeValidationTopKCallback(
+                top_k=args.topk_checkpoints,
+                metric_name=args.topk_metric,
+                greater_is_better=args.topk_greater_is_better,
+            ).set_trainer(trainer)
+        )
 
     accelerator.print("🚀 Training …")
     trainer.train(resume_from_checkpoint=args.resume)

@@ -11,8 +11,19 @@ import hashlib
 import numpy as np
 
 from collections import defaultdict
-from editdistance import eval as distance
 from transformers import TrainerCallback
+
+try:
+    from editdistance import eval as distance
+except ImportError:
+    def distance(a, b):
+        previous = list(range(len(b) + 1))
+        for i, ca in enumerate(a, start=1):
+            current = [i]
+            for j, cb in enumerate(b, start=1):
+                current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (ca != cb)))
+            previous = current
+        return previous[-1]
 
 def del_parentheses(text):
     pattern = r"\([^()]*\)"

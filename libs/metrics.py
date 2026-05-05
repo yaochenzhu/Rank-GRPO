@@ -1,7 +1,18 @@
 
 import numpy as np
 from tqdm.autonotebook import tqdm
-from editdistance import eval as distance
+
+try:
+    from editdistance import eval as distance
+except ImportError:
+    def distance(a, b):
+        previous = list(range(len(b) + 1))
+        for i, ca in enumerate(a, start=1):
+            current = [i]
+            for j, cb in enumerate(b, start=1):
+                current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + (ca != cb)))
+            previous = current
+        return previous[-1]
 
 def recall_at_k(hits, num_gt, k):
     if len(hits) == 0:
@@ -29,8 +40,11 @@ def ndcg_at_k(hits, num_gt, k):
 def remove_seen(seen_titles, rec_list):
     return [rec for rec in rec_list if rec[0] not in seen_titles]
 
+def _catalog_contains(gt_catalog, title, year):
+    return (title, year) in gt_catalog or (title, str(year)) in gt_catalog
+
 def remove_gt_catalog(rec_list, gt_catalog):
-    return [rec for rec in rec_list if rec in gt_catalog]
+    return [rec for rec in rec_list if _catalog_contains(gt_catalog, rec[0], rec[1])]
 
 def evaluate_direct_match(item, k, seen_field, rec_field, gt_field, gt_catalog):
     rec_list_raw = item[rec_field]

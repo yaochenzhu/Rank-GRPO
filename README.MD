@@ -109,8 +109,8 @@ grpo_test_qwen25_0.5b_with_kl.py \
 --kl_beta 1e-3 \
 --adam_beta1 0.9 \
 --adam_beta2 0.99 \
---per_device_train_batch_size 16 \
---per_device_eval_batch_size 16 \
+--per_device_train_batch_size 4 \
+--per_device_eval_batch_size 4 \
 --num_train_epochs 2 \
 --gradient_accumulation_steps 6 \
 --save_strategy steps \
