@@ -2,17 +2,16 @@ import re
 import numpy as np
 from functools import wraps, lru_cache
 
+try:
+    from libs.catalog import catalog_contains
+except ImportError:
+    from catalog import catalog_contains
+
 def _safe_int_year(y):
     try:
         return int(str(y))
     except Exception:
         return None
-
-
-def _catalog_contains(gt_catalog, title, year) -> bool:
-    if (title, year) in gt_catalog:
-        return True
-    return (title, str(year)) in gt_catalog
 
 def _default_title_normalizer(s: str) -> str:
     s = re.sub(r"\s+", " ", str(s).strip())
@@ -63,7 +62,7 @@ def evaluate_direct_match_aligned(
         if rec_title in seen_titles:
             continue
 
-        if not _catalog_contains(gt_catalog, rec_title, rec_year):
+        if not catalog_contains(gt_catalog, rec_title, rec_year):
             continue
 
         y = _safe_int_year(rec_year)
