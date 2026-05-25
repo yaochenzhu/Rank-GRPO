@@ -30,6 +30,7 @@ import torch
 import torch.utils.data
 import torch.nn.functional as F
 import transformers
+from accelerate.state import AcceleratorState
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -51,15 +52,20 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
-from ..extras.profiling import profiling_context, profiling_decorator
-from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_liger_kernel_available, is_vllm_available
-from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-from ..models.utils import _ForwardRedirection
-from .callbacks import SyncRefModelCallback
-from .grpo_config import GRPOConfig
-from .utils import (
+if not hasattr(PreTrainedTokenizerBase, "all_special_tokens_extended"):
+    PreTrainedTokenizerBase.all_special_tokens_extended = property(lambda self: self.all_special_tokens)
+
+from trl.data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from trl.extras.profiling import profiling_context, profiling_decorator
+try:
+    from trl.extras.vllm_client import VLLMClient
+except ModuleNotFoundError:
+    VLLMClient = None
+from trl.import_utils import is_liger_kernel_available, is_vllm_available
+from trl.models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from trl.models.utils import _ForwardRedirection
+from trl.trainer.grpo_config import GRPOConfig
+from trl.trainer.utils import (
     disable_dropout_in_model,
     entropy_from_logits,
     generate_model_card,
@@ -82,6 +88,36 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+
+class SyncRefModelCallback(TrainerCallback):
+    def __init__(self, ref_model: Union[PreTrainedModel, torch.nn.Module], accelerator: Optional[Any]):
+        self.accelerator = accelerator
+        self.ref_model = ref_model
+
+    @staticmethod
+    def _sync_target_model(model, target_model, alpha):
+        for target_param, copy_param in zip(target_model.parameters(), model.parameters()):
+            target_param.data.mul_(1.0 - alpha).add_(copy_param.data, alpha=alpha)
+
+    @staticmethod
+    def sync_target_model(model, target_model, alpha):
+        deepspeed_plugin = AcceleratorState().deepspeed_plugin
+        if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            import deepspeed
+
+            with deepspeed.zero.GatheredParameters(list(model.parameters()) + list(target_model.parameters()), modifier_rank=0):
+                if deepspeed.comm.get_rank() == 0:
+                    SyncRefModelCallback._sync_target_model(model, target_model, alpha)
+        else:
+            SyncRefModelCallback._sync_target_model(model, target_model, alpha)
+
+    def on_step_end(self, args, state, control, **kwargs):
+        model = kwargs["model"]
+        if self.ref_model is not None and state.global_step % args.ref_model_sync_steps == 0:
+            if self.accelerator:
+                model = self.accelerator.unwrap_model(model)
+            self.sync_target_model(model, self.ref_model, args.ref_model_mixup_alpha)
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -764,6 +800,8 @@ class RankGRPOTrainer(Trainer):
         # "Could not estimate the number of tokens of the input, floating-point operations will not be computed." To
         # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
         # This acts as a flag to indicate that the warning has already been issued.
+        if not hasattr(model, "warnings_issued"):
+            model.warnings_issued = {}
         model.warnings_issued["estimate_tokens"] = True
 
         super().__init__(
@@ -1056,6 +1094,7 @@ class RankGRPOTrainer(Trainer):
         return RepeatSampler(
             data_source=eval_dataset,
             mini_repeat_count=self.num_generations,
+            shuffle=getattr(self.args, "val_shuffle", False),
             seed=self.args.seed,
         )
 
@@ -1888,11 +1927,11 @@ class RankGRPOTrainer(Trainer):
         # Log prompt/completion texts and a seq-level sum for visibility
         self._logs["prompt"].extend(gather_object(prompts_text))
         self._logs["completion"].extend(gather_object(completions_text))
-        seq_reward = rewards_items[:, 0]
+        seq_reward = rewards_items.nansum(dim=1)
         # Put everything under the first reward name for backward-compat table
         if self.reward_func_names:
             self._logs["rewards"][self.reward_func_names[0]].extend(seq_reward.tolist())
-            self._metrics[mode]["reward_total"].append(rewards_items[:, 0].mean().item())
+            self._metrics[mode]["reward_total"].append(seq_reward.mean().item())
         self._logs["advantages"].extend(advantages_items.sum(dim=1).tolist())
 
         
@@ -2151,7 +2190,7 @@ class RankGRPOTrainer(Trainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
